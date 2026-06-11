@@ -1,0 +1,16 @@
+#!/bin/bash
+# QEMU wrapper for win10 stealth VM — rewrites the -machine arg to inject ACPI OEM IDs
+# so QEMU-generated tables (FACP, MADT, MCFG, etc.) show ALASKA/A M I instead of BOCHS/BXPC.
+# Only patches q35 machine types; passes everything else through unchanged.
+REAL_QEMU=/usr/bin/qemu-system-x86_64
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-machine" && "$2" == pc-q35-* ]]; then
+        ARGS+=("-machine" "${2},x-oem-id=ALASKA,x-oem-table-id=A M I   ")
+        shift 2
+    else
+        ARGS+=("$1")
+        shift
+    fi
+done
+exec "$REAL_QEMU" "${ARGS[@]}"

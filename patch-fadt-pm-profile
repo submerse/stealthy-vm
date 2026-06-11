@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+import os,sys,subprocess,time
+DOMAIN=sys.argv[1] if len(sys.argv)>1 else "win10"
+FACP=b"FACP";OEM=b"ALASKA"
+def virsh(c):subprocess.run(["virsh",c,DOMAIN],capture_output=True)
+def qpid(d):
+    for p in os.listdir("/proc"):
+        if not p.isdigit():continue
+        try:
+            cl=open(f"/proc/{p}/cmdline").read()
+            if "qemu-system-x86_64" in cl and d in cl:return int(p)
+        except:pass
+    return None
+def patch(pid):
+    patched=0
+    regions=[]
+    for ln in open(f"/proc/{pid}/maps"):
+        pts=ln.split()
+        if len(pts)<2 or "r" not in pts[1] or "w" not in pts[1]:continue
+        s,e=pts[0].split("-");sz=int(e,16)-int(s,16)
+        if sz<256 or sz>32*1024**3:continue
+        regions.append((int(s,16),int(e,16)))
+    mem=open(f"/proc/{pid}/mem","r+b")
+    with mem:
+        for s,e in regions:
+            off=0;sz=e-s
+            while off<sz:
+                csz=min(64*1024*1024,sz-off);ab=s+off
+                try:mem.seek(ab);d=mem.read(csz)
+                except:break
+                i=0
+                while True:
+                    p=d.find(FACP,i)
+                    if p<0:break
+                    if p+46<len(d) and d[p+10:p+16]==OEM:
+                        at=ab+p
+                        b9=d[p+9];b45=d[p+45]
+                        sys.stderr.write(f"FACP+ALASKA@{at:#x} cksum={b9:#x} pm={b45:#x}\n")
+                        if b45==0:
+                            # patch pm_profile 0->1
+                            mem.seek(at+45);mem.write(b"\x01")
+                            # fix checksum: sum increases by 1, so checksum decreases by 1
+                            new_cksum=(b9-1)&0xFF
+                            mem.seek(at+9);mem.write(bytes([new_cksum]))
+                            patched+=1
+                            sys.stderr.write(f"  patched: pm 0->1, cksum {b9:#x}->{new_cksum:#x}\n")
+                        elif b45==1:
+                            sys.stderr.write("  already 1\n")
+                    i=p+1
+                off+=csz
+    return patched
+if os.geteuid()!=0:sys.exit("need root")
+pid=qpid(DOMAIN)
+if not pid:sys.exit("QEMU not found")
+sys.stderr.write(f"PID={pid}\n")
+virsh("suspend");time.sleep(0.2)
+n=patch(pid)
+virsh("resume")
+sys.stderr.write(f"done: {n} patched\n")
